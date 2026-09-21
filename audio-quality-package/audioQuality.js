@@ -1,13 +1,14 @@
 var AudioQualityModule = (() => {
   var _scriptName = globalThis.document?.currentScript?.src;
   return async function (moduleArg = {}) {
+    var moduleRtn;
     var Module = moduleArg;
     var ENVIRONMENT_IS_WEB = !!globalThis.window;
     var ENVIRONMENT_IS_WORKER = !!globalThis.WorkerGlobalScope;
     var ENVIRONMENT_IS_NODE =
       globalThis.process?.versions?.node &&
       globalThis.process?.type != "renderer";
-    var programArgs = [];
+    var arguments_ = [];
     var thisProgram = "./this.program";
     var quit_ = (status, toThrow) => {
       throw toThrow;
@@ -26,7 +27,7 @@ var AudioQualityModule = (() => {
     }
     var readAsync, readBinary;
     if (ENVIRONMENT_IS_NODE) {
-      var fs = require("node:fs");
+      var fs = require("fs");
       scriptDirectory = __dirname + "/";
       readBinary = (filename) => {
         filename = isFileURI(filename) ? new URL(filename) : filename;
@@ -41,7 +42,7 @@ var AudioQualityModule = (() => {
       if (process.argv.length > 1) {
         thisProgram = process.argv[1].replace(/\\/g, "/");
       }
-      programArgs = process.argv.slice(2);
+      arguments_ = process.argv.slice(2);
       quit_ = (status, toThrow) => {
         process.exitCode = status;
         throw toThrow;
@@ -90,36 +91,32 @@ var AudioQualityModule = (() => {
     var err = console.error.bind(console);
     var wasmBinary;
     var ABORT = false;
+    var EXITSTATUS;
     var isFileURI = (filename) => filename.startsWith("file://");
-    class EmscriptenEH {}
-    class EmscriptenSjLj extends EmscriptenEH {}
-    class CppException extends EmscriptenEH {
-      constructor(excPtr) {
-        super();
-        this.excPtr = excPtr;
-      }
-    }
+    var readyPromiseResolve, readyPromiseReject;
+    var HEAP8, HEAPU8, HEAP16, HEAPU16, HEAP32, HEAPU32, HEAPF32, HEAPF64;
+    var HEAP64, HEAPU64;
     var runtimeInitialized = false;
-    function getMemoryBuffer() {
-      return wasmMemory.buffer;
-    }
     function updateMemoryViews() {
-      if (HEAP8?.buffer?.resizable) return;
-      var b = getMemoryBuffer();
+      var b = wasmMemory.buffer;
       HEAP8 = new Int8Array(b);
       HEAP16 = new Int16Array(b);
       Module["HEAPU8"] = HEAPU8 = new Uint8Array(b);
+      HEAPU16 = new Uint16Array(b);
       HEAP32 = new Int32Array(b);
       HEAPU32 = new Uint32Array(b);
       HEAPF32 = new Float32Array(b);
       HEAPF64 = new Float64Array(b);
       HEAP64 = new BigInt64Array(b);
+      HEAPU64 = new BigUint64Array(b);
     }
     function preRun() {
-      var preRun = Module["preRun"];
-      if (preRun) {
-        if (typeof preRun == "function") preRun = [preRun];
-        onPreRuns.push(...preRun);
+      if (Module["preRun"]) {
+        if (typeof Module["preRun"] == "function")
+          Module["preRun"] = [Module["preRun"]];
+        while (Module["preRun"].length) {
+          addOnPreRun(Module["preRun"].shift());
+        }
       }
       callRuntimeCallbacks(onPreRuns);
     }
@@ -131,20 +128,23 @@ var AudioQualityModule = (() => {
       FS.ignorePermissions = false;
     }
     function postRun() {
-      var postRun = Module["postRun"];
-      if (postRun) {
-        if (typeof postRun == "function") postRun = [postRun];
-        onPostRuns.push(...postRun);
+      if (Module["postRun"]) {
+        if (typeof Module["postRun"] == "function")
+          Module["postRun"] = [Module["postRun"]];
+        while (Module["postRun"].length) {
+          addOnPostRun(Module["postRun"].shift());
+        }
       }
       callRuntimeCallbacks(onPostRuns);
     }
     function abort(what) {
       Module["onAbort"]?.(what);
-      what = `Aborted(${what})`;
+      what = "Aborted(" + what + ")";
       err(what);
       ABORT = true;
       what += ". Build with -sASSERTIONS for more info.";
       var e = new WebAssembly.RuntimeError(what);
+      readyPromiseReject?.(e);
       throw e;
     }
     var wasmBinaryFile;
@@ -152,6 +152,9 @@ var AudioQualityModule = (() => {
       return locateFile("audioQuality.wasm");
     }
     function getBinarySync(file) {
+      if (file == wasmBinaryFile && wasmBinary) {
+        return new Uint8Array(wasmBinary);
+      }
       if (readBinary) {
         return readBinary(file);
       }
@@ -197,7 +200,7 @@ var AudioQualityModule = (() => {
       return imports;
     }
     async function createWasm() {
-      function receiveInstance(instance) {
+      function receiveInstance(instance, module) {
         wasmExports = instance.exports;
         assignWasmExports(wasmExports);
         updateMemoryViews();
@@ -207,10 +210,11 @@ var AudioQualityModule = (() => {
         return receiveInstance(result["instance"]);
       }
       var info = getWasmImports();
-      var instantiateWasm = Module["instantiateWasm"];
-      if (instantiateWasm) {
-        return new Promise((resolve) => {
-          instantiateWasm(info, (inst) => resolve(receiveInstance(inst)));
+      if (Module["instantiateWasm"]) {
+        return new Promise((resolve, reject) => {
+          Module["instantiateWasm"](info, (inst, mod) => {
+            resolve(receiveInstance(inst, mod));
+          });
         });
       }
       wasmBinaryFile ??= findWasmBinary();
@@ -225,14 +229,15 @@ var AudioQualityModule = (() => {
         this.status = status;
       }
     }
-    var HEAP8;
     var callRuntimeCallbacks = (callbacks) => {
       while (callbacks.length > 0) {
         callbacks.shift()(Module);
       }
     };
     var onPostRuns = [];
+    var addOnPostRun = (cb) => onPostRuns.push(cb);
     var onPreRuns = [];
+    var addOnPreRun = (cb) => onPreRuns.push(cb);
     var noExitRuntime = true;
     var stackRestore = (val) => __emscripten_stack_restore(val);
     var stackSave = () => _emscripten_stack_get_current();
@@ -284,7 +289,6 @@ var AudioQualityModule = (() => {
       }
       return str;
     };
-    var HEAPU8;
     var UTF8ToString = (ptr, maxBytesToRead, ignoreNul) =>
       ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead, ignoreNul) : "";
     var ___assert_fail = (condition, filename, line, func) =>
@@ -308,14 +312,13 @@ var AudioQualityModule = (() => {
       exceptionCaught.push(info);
       return ___cxa_get_exception_ptr(ptr);
     };
-    var exceptionLast = null;
+    var exceptionLast = 0;
     var ___cxa_end_catch = () => {
       _setThrew(0, 0);
       var info = exceptionCaught.pop();
       ___cxa_decrement_exception_refcount(info.excPtr);
-      exceptionLast = null;
+      exceptionLast = 0;
     };
-    var HEAPU32;
     class ExceptionInfo {
       constructor(excPtr) {
         this.excPtr = excPtr;
@@ -361,7 +364,7 @@ var AudioQualityModule = (() => {
     }
     var setTempRet0 = (val) => __emscripten_tempret_set(val);
     var findMatchingCatch = (args) => {
-      var thrown = exceptionLast?.excPtr;
+      var thrown = exceptionLast;
       if (!thrown) {
         setTempRet0(0);
         return 0;
@@ -374,7 +377,7 @@ var AudioQualityModule = (() => {
         return thrown;
       }
       for (var caughtType of args) {
-        if (!caughtType || caughtType === thrownType) {
+        if (caughtType === 0 || caughtType === thrownType) {
           break;
         }
         var adjusted_ptr_addr = info.ptr + 16;
@@ -388,37 +391,36 @@ var AudioQualityModule = (() => {
     };
     var ___cxa_find_matching_catch_2 = () => findMatchingCatch([]);
     var ___cxa_find_matching_catch_3 = (arg0) => findMatchingCatch([arg0]);
-    var __Unwind_RaiseException = (ex) => {
-      throw ex;
-    };
     var ___cxa_rethrow = () => {
-      if (!exceptionCaught.length) {
+      var info = exceptionCaught.pop();
+      if (!info) {
         abort("no exception to throw");
       }
-      var info = exceptionCaught.at(-1);
       var ptr = info.excPtr;
-      info.set_rethrown(true);
-      info.set_caught(false);
-      uncaughtExceptionCount++;
+      if (!info.get_rethrown()) {
+        exceptionCaught.push(info);
+        info.set_rethrown(true);
+        info.set_caught(false);
+        uncaughtExceptionCount++;
+      }
       ___cxa_increment_exception_refcount(ptr);
-      ptr = exceptionLast = new CppException(ptr);
-      __Unwind_RaiseException(ptr);
+      exceptionLast = ptr;
+      throw exceptionLast;
     };
     var ___cxa_throw = (ptr, type, destructor) => {
       var info = new ExceptionInfo(ptr);
       info.init(type, destructor);
       ___cxa_increment_exception_refcount(ptr);
-      ptr = exceptionLast = new CppException(ptr);
+      exceptionLast = ptr;
       uncaughtExceptionCount++;
-      __Unwind_RaiseException(ptr);
+      throw exceptionLast;
     };
     var ___cxa_uncaught_exceptions = () => uncaughtExceptionCount;
-    var __Unwind_Resume = (ex) => {
-      throw ex;
-    };
     var ___resumeException = (ptr) => {
-      ptr = exceptionLast ??= new CppException(ptr);
-      __Unwind_Resume(ptr);
+      if (!exceptionLast) {
+        exceptionLast = ptr;
+      }
+      throw exceptionLast;
     };
     var PATH = {
       isAbs: (path) => path.charAt(0) === "/",
@@ -481,12 +483,14 @@ var AudioQualityModule = (() => {
     };
     var initRandomFill = () => {
       if (ENVIRONMENT_IS_NODE) {
-        var nodeCrypto = require("node:crypto");
-        return (view) => (nodeCrypto.randomFillSync(view), 0);
+        var nodeCrypto = require("crypto");
+        return (view) => nodeCrypto.randomFillSync(view);
       }
-      return (view) => (crypto.getRandomValues(view), 0);
+      return (view) => crypto.getRandomValues(view);
     };
-    var randomFill = (view) => (randomFill = initRandomFill())(view);
+    var randomFill = (view) => {
+      (randomFill = initRandomFill())(view);
+    };
     var PATH_FS = {
       resolve: (...args) => {
         var resolvedPath = "",
@@ -666,13 +670,12 @@ var AudioQualityModule = (() => {
             } catch (e) {
               throw new FS.ErrnoError(29);
             }
-            if (result === undefined && !bytesRead) {
+            if (result === undefined && bytesRead === 0) {
               throw new FS.ErrnoError(6);
             }
             if (result === null || result === undefined) break;
             bytesRead++;
             buffer[offset + i] = result;
-            if (result === 10) break;
           }
           if (bytesRead) {
             stream.node.atime = Date.now();
@@ -750,8 +753,14 @@ var AudioQualityModule = (() => {
         },
       },
     };
+    var zeroMemory = (ptr, size) => HEAPU8.fill(0, ptr, ptr + size);
+    var alignMemory = (size, alignment) =>
+      Math.ceil(size / alignment) * alignment;
     var mmapAlloc = (size) => {
-      abort();
+      size = alignMemory(size, 65536);
+      var ptr = _emscripten_builtin_memalign(65536, size);
+      if (ptr) zeroMemory(ptr, size);
+      return ptr;
     };
     var MEMFS = {
       ops_table: null,
@@ -815,7 +824,7 @@ var AudioQualityModule = (() => {
           node.node_ops = MEMFS.ops_table.file.node;
           node.stream_ops = MEMFS.ops_table.file.stream;
           node.usedBytes = 0;
-          node.contents = MEMFS.emptyFileContents ??= new Uint8Array(0);
+          node.contents = null;
         } else if (FS.isLink(node.mode)) {
           node.node_ops = MEMFS.ops_table.link.node;
           node.stream_ops = MEMFS.ops_table.link.stream;
@@ -831,10 +840,13 @@ var AudioQualityModule = (() => {
         return node;
       },
       getFileDataAsTypedArray(node) {
-        return node.contents.subarray(0, node.usedBytes);
+        if (!node.contents) return new Uint8Array(0);
+        if (node.contents.subarray)
+          return node.contents.subarray(0, node.usedBytes);
+        return new Uint8Array(node.contents);
       },
       expandFileStorage(node, newCapacity) {
-        var prevCapacity = node.contents.length;
+        var prevCapacity = node.contents ? node.contents.length : 0;
         if (prevCapacity >= newCapacity) return;
         var CAPACITY_DOUBLING_MAX = 1024 * 1024;
         newCapacity = Math.max(
@@ -843,19 +855,27 @@ var AudioQualityModule = (() => {
             (prevCapacity < CAPACITY_DOUBLING_MAX ? 2 : 1.125)) >>>
             0,
         );
-        if (prevCapacity) newCapacity = Math.max(newCapacity, 256);
-        var oldContents = MEMFS.getFileDataAsTypedArray(node);
+        if (prevCapacity != 0) newCapacity = Math.max(newCapacity, 256);
+        var oldContents = node.contents;
         node.contents = new Uint8Array(newCapacity);
-        node.contents.set(oldContents);
+        if (node.usedBytes > 0)
+          node.contents.set(oldContents.subarray(0, node.usedBytes), 0);
       },
       resizeFileStorage(node, newSize) {
         if (node.usedBytes == newSize) return;
-        var oldContents = node.contents;
-        node.contents = new Uint8Array(newSize);
-        node.contents.set(
-          oldContents.subarray(0, Math.min(newSize, node.usedBytes)),
-        );
-        node.usedBytes = newSize;
+        if (newSize == 0) {
+          node.contents = null;
+          node.usedBytes = 0;
+        } else {
+          var oldContents = node.contents;
+          node.contents = new Uint8Array(newSize);
+          if (oldContents) {
+            node.contents.set(
+              oldContents.subarray(0, Math.min(newSize, node.usedBytes)),
+            );
+          }
+          node.usedBytes = newSize;
+        }
       },
       node_ops: {
         getattr(node) {
@@ -957,7 +977,12 @@ var AudioQualityModule = (() => {
           var contents = stream.node.contents;
           if (position >= stream.node.usedBytes) return 0;
           var size = Math.min(stream.node.usedBytes - position, length);
-          buffer.set(contents.subarray(position, position + size), offset);
+          if (size > 8 && contents.subarray) {
+            buffer.set(contents.subarray(position, position + size), offset);
+          } else {
+            for (var i = 0; i < size; i++)
+              buffer[offset + i] = contents[position + i];
+          }
           return size;
         },
         write(stream, buffer, offset, length, position, canOwn) {
@@ -967,20 +992,35 @@ var AudioQualityModule = (() => {
           if (!length) return 0;
           var node = stream.node;
           node.mtime = node.ctime = Date.now();
-          if (canOwn) {
-            node.contents = buffer.subarray(offset, offset + length);
-            node.usedBytes = length;
-          } else if (!node.usedBytes && !position) {
-            node.contents = buffer.slice(offset, offset + length);
-            node.usedBytes = length;
-          } else {
-            MEMFS.expandFileStorage(node, position + length);
+          if (buffer.subarray && (!node.contents || node.contents.subarray)) {
+            if (canOwn) {
+              node.contents = buffer.subarray(offset, offset + length);
+              node.usedBytes = length;
+              return length;
+            } else if (node.usedBytes === 0 && position === 0) {
+              node.contents = buffer.slice(offset, offset + length);
+              node.usedBytes = length;
+              return length;
+            } else if (position + length <= node.usedBytes) {
+              node.contents.set(
+                buffer.subarray(offset, offset + length),
+                position,
+              );
+              return length;
+            }
+          }
+          MEMFS.expandFileStorage(node, position + length);
+          if (node.contents.subarray && buffer.subarray) {
             node.contents.set(
               buffer.subarray(offset, offset + length),
               position,
             );
-            node.usedBytes = Math.max(node.usedBytes, position + length);
+          } else {
+            for (var i = 0; i < length; i++) {
+              node.contents[position + i] = buffer[offset + i];
+            }
           }
+          node.usedBytes = Math.max(node.usedBytes, position + length);
           return length;
         },
         llseek(stream, offset, whence) {
@@ -1004,7 +1044,7 @@ var AudioQualityModule = (() => {
           var ptr;
           var allocated;
           var contents = stream.node.contents;
-          if (!(flags & 2) && contents.buffer === HEAP8.buffer) {
+          if (!(flags & 2) && contents && contents.buffer === HEAP8.buffer) {
             allocated = false;
             ptr = contents.byteOffset;
           } else {
@@ -1037,7 +1077,6 @@ var AudioQualityModule = (() => {
       },
     };
     var FS_modeStringToFlags = (str) => {
-      if (typeof str != "string") return str;
       var flagModes = {
         r: 0,
         "r+": 2,
@@ -1052,15 +1091,6 @@ var AudioQualityModule = (() => {
       }
       return flags;
     };
-    var FS_fileDataToTypedArray = (data) => {
-      if (typeof data == "string") {
-        data = intArrayFromString(data, true);
-      }
-      if (!data.subarray) {
-        data = new Uint8Array(data);
-      }
-      return data;
-    };
     var FS_getMode = (canRead, canWrite) => {
       var mode = 0;
       if (canRead) mode |= 292 | 73;
@@ -1073,23 +1103,20 @@ var AudioQualityModule = (() => {
     };
     var FS_createDataFile = (...args) => FS.createDataFile(...args);
     var getUniqueRunDependency = (id) => id;
-    var dependenciesPromise = null;
-    var resolveRunDependencies = async () => dependenciesPromise;
     var runDependencies = 0;
-    var dependenciesPromiseResolve = null;
+    var dependenciesFulfilled = null;
     var removeRunDependency = (id) => {
       runDependencies--;
       Module["monitorRunDependencies"]?.(runDependencies);
-      if (!runDependencies) {
-        dependenciesPromiseResolve();
+      if (runDependencies == 0) {
+        if (dependenciesFulfilled) {
+          var callback = dependenciesFulfilled;
+          dependenciesFulfilled = null;
+          callback();
+        }
       }
     };
     var addRunDependency = (id) => {
-      if (!runDependencies) {
-        dependenciesPromise = new Promise(
-          (resolve) => (dependenciesPromiseResolve = resolve),
-        );
-      }
       runDependencies++;
       Module["monitorRunDependencies"]?.(runDependencies);
     };
@@ -1167,6 +1194,7 @@ var AudioQualityModule = (() => {
       ignorePermissions: true,
       filesystems: null,
       syncFSRequests: 0,
+      readFiles: {},
       ErrnoError: class {
         name = "ErrnoError";
         constructor(errno) {
@@ -1238,25 +1266,6 @@ var AudioQualityModule = (() => {
         }
         get isDevice() {
           return FS.isChrdev(this.mode);
-        }
-        addListener(cb, exclusive = false) {
-          var entry = { cb, exclusive };
-          var listeners = (this.listeners ??= new Set());
-          listeners.add(entry);
-          return { listeners, entry };
-        }
-        notifyListeners(flags) {
-          if (!this.listeners) return;
-          var excl;
-          for (var entry of this.listeners) {
-            if (entry.exclusive) (excl ||= []).push(entry);
-            else entry.cb(flags);
-          }
-          if (excl) {
-            var i = (this.exclTurn || 0) % excl.length;
-            this.exclTurn = i + 1;
-            excl[i].cb(flags);
-          }
         }
       },
       lookupPath(path, opts = {}) {
@@ -1421,11 +1430,9 @@ var AudioQualityModule = (() => {
         }
         if (perms.includes("r") && !(node.mode & 292)) {
           return 2;
-        }
-        if (perms.includes("w") && !(node.mode & 146)) {
+        } else if (perms.includes("w") && !(node.mode & 146)) {
           return 2;
-        }
-        if (perms.includes("x") && !(node.mode & 73)) {
+        } else if (perms.includes("x") && !(node.mode & 73)) {
           return 2;
         }
         return 0;
@@ -1465,8 +1472,10 @@ var AudioQualityModule = (() => {
           if (FS.isRoot(node) || FS.getPath(node) === FS.cwd()) {
             return 10;
           }
-        } else if (FS.isDir(node.mode)) {
-          return 31;
+        } else {
+          if (FS.isDir(node.mode)) {
+            return 31;
+          }
         }
         return 0;
       },
@@ -1476,14 +1485,12 @@ var AudioQualityModule = (() => {
         }
         if (FS.isLink(node.mode)) {
           return 32;
-        }
-        var mode = FS.flagsToPermissionString(flags);
-        if (FS.isDir(node.mode)) {
-          if (mode !== "r" || flags & (512 | 64)) {
+        } else if (FS.isDir(node.mode)) {
+          if (FS.flagsToPermissionString(flags) !== "r" || flags & (512 | 64)) {
             return 31;
           }
         }
-        return FS.nodePermissions(node, mode);
+        return FS.nodePermissions(node, FS.flagsToPermissionString(flags));
       },
       checkOpExists(op, err) {
         if (!op) {
@@ -1530,14 +1537,7 @@ var AudioQualityModule = (() => {
         var arg = setattr ? stream : node;
         setattr ??= node.node_ops.setattr;
         FS.checkOpExists(setattr, 63);
-        try {
-          setattr(arg, attr);
-        } catch (e) {
-          if (e instanceof RangeError) {
-            throw new FS.ErrnoError(22);
-          }
-          throw e;
-        }
+        setattr(arg, attr);
       },
       chrdev_stream_ops: {
         open(stream) {
@@ -1751,22 +1751,6 @@ var AudioQualityModule = (() => {
           throw new FS.ErrnoError(63);
         }
         return parent.node_ops.symlink(parent, newname, oldpath);
-      },
-      link(oldpath, newpath, flags) {
-        var lookup = FS.lookupPath(newpath, { parent: true });
-        var parent = lookup.node;
-        if (!parent) {
-          throw new FS.ErrnoError(44);
-        }
-        var newname = PATH.basename(newpath);
-        var errCode = FS.mayCreate(parent, newname);
-        if (errCode) {
-          throw new FS.ErrnoError(errCode);
-        }
-        if (!parent.node_ops.link) {
-          throw new FS.ErrnoError(34);
-        }
-        return parent.node_ops.link(parent, newname, oldpath, flags);
       },
       rename(old_path, new_path) {
         var old_dirname = PATH.dirname(old_path);
@@ -1985,15 +1969,17 @@ var AudioQualityModule = (() => {
         }
         FS.doTruncate(stream, stream.node, len);
       },
-      utime(path, atime, mtime, dontFollow) {
-        var lookup = FS.lookupPath(path, { follow: !dontFollow });
-        FS.doSetAttr(null, lookup.node, { atime, mtime, dontFollow });
+      utime(path, atime, mtime) {
+        var lookup = FS.lookupPath(path, { follow: true });
+        var node = lookup.node;
+        var setattr = FS.checkOpExists(node.node_ops.setattr, 63);
+        setattr(node, { atime, mtime });
       },
       open(path, flags, mode = 438) {
         if (path === "") {
           throw new FS.ErrnoError(44);
         }
-        flags = FS_modeStringToFlags(flags);
+        flags = typeof flags == "string" ? FS_modeStringToFlags(flags) : flags;
         if (flags & 64) {
           mode = (mode & 4095) | 32768;
         } else {
@@ -2060,6 +2046,11 @@ var AudioQualityModule = (() => {
         if (created) {
           FS.chmod(node, mode & 511);
         }
+        if (Module["logReadFiles"] && !(flags & 1)) {
+          if (!(path in FS.readFiles)) {
+            FS.readFiles[path] = 1;
+          }
+        }
         return stream;
       },
       close(stream) {
@@ -2067,7 +2058,6 @@ var AudioQualityModule = (() => {
           throw new FS.ErrnoError(8);
         }
         if (stream.getdents) stream.getdents = null;
-        stream.node?.notifyListeners(32);
         try {
           if (stream.stream_ops.close) {
             stream.stream_ops.close(stream);
@@ -2165,7 +2155,11 @@ var AudioQualityModule = (() => {
         return bytesWritten;
       },
       mmap(stream, length, position, prot, flags) {
-        if (prot & 2 && !(flags & 2) && (stream.flags & 2097155) !== 2) {
+        if (
+          (prot & 2) !== 0 &&
+          (flags & 2) === 0 &&
+          (stream.flags & 2097155) !== 2
+        ) {
           throw new FS.ErrnoError(2);
         }
         if ((stream.flags & 2097155) === 1) {
@@ -2198,8 +2192,8 @@ var AudioQualityModule = (() => {
         return stream.stream_ops.ioctl(stream, cmd, arg);
       },
       readFile(path, opts = {}) {
-        opts.flags = opts.flags ?? 0;
-        opts.encoding = opts.encoding ?? "binary";
+        opts.flags = opts.flags || 0;
+        opts.encoding = opts.encoding || "binary";
         if (opts.encoding !== "utf8" && opts.encoding !== "binary") {
           abort(`Invalid encoding type "${opts.encoding}"`);
         }
@@ -2215,10 +2209,16 @@ var AudioQualityModule = (() => {
         return buf;
       },
       writeFile(path, data, opts = {}) {
-        opts.flags = opts.flags ?? 577;
+        opts.flags = opts.flags || 577;
         var stream = FS.open(path, opts.flags, opts.mode);
-        data = FS_fileDataToTypedArray(data);
-        FS.write(stream, data, 0, data.byteLength, undefined, opts.canOwn);
+        if (typeof data == "string") {
+          data = new Uint8Array(intArrayFromString(data, true));
+        }
+        if (ArrayBuffer.isView(data)) {
+          FS.write(stream, data, 0, data.byteLength, undefined, opts.canOwn);
+        } else {
+          abort("Unsupported data type");
+        }
         FS.close(stream);
       },
       cwd: () => FS.currentPath,
@@ -2256,7 +2256,7 @@ var AudioQualityModule = (() => {
         var randomBuffer = new Uint8Array(1024),
           randomLeft = 0;
         var randomByte = () => {
-          if (!randomLeft) {
+          if (randomLeft === 0) {
             randomFill(randomBuffer);
             randomLeft = randomBuffer.byteLength;
           }
@@ -2418,7 +2418,12 @@ var AudioQualityModule = (() => {
         var mode = FS_getMode(canRead, canWrite);
         var node = FS.create(path, mode);
         if (data) {
-          data = FS_fileDataToTypedArray(data);
+          if (typeof data == "string") {
+            var arr = new Array(data.length);
+            for (var i = 0, len = data.length; i < len; ++i)
+              arr[i] = data.charCodeAt(i);
+            data = arr;
+          }
           FS.chmod(node, mode | 146);
           var stream = FS.open(node, 577);
           FS.write(stream, data, 0, data.length, 0, canOwn);
@@ -2452,7 +2457,7 @@ var AudioQualityModule = (() => {
               } catch (e) {
                 throw new FS.ErrnoError(29);
               }
-              if (result === undefined && !bytesRead) {
+              if (result === undefined && bytesRead === 0) {
                 throw new FS.ErrnoError(6);
               }
               if (result === null || result === undefined) break;
@@ -2517,7 +2522,7 @@ var AudioQualityModule = (() => {
             if (
               !((xhr.status >= 200 && xhr.status < 300) || xhr.status === 304)
             )
-              abort(`Couldn't load ${url}. Status: ${xhr.status}`);
+              abort("Couldn't load " + url + ". Status: " + xhr.status);
             var datalength = Number(xhr.getResponseHeader("Content-length"));
             var header;
             var hasByteServing =
@@ -2530,13 +2535,21 @@ var AudioQualityModule = (() => {
             if (!hasByteServing) chunkSize = datalength;
             var doXHR = (from, to) => {
               if (from > to)
-                abort(`invalid range (${from}, ${to}) or no bytes requested!`);
+                abort(
+                  "invalid range (" +
+                    from +
+                    ", " +
+                    to +
+                    ") or no bytes requested!",
+                );
               if (to > datalength - 1)
-                abort(`only ${datalength} bytes available! programmer error!`);
+                abort(
+                  "only " + datalength + " bytes available! programmer error!",
+                );
               var xhr = new XMLHttpRequest();
               xhr.open("GET", url, false);
               if (datalength !== chunkSize)
-                xhr.setRequestHeader("Range", `bytes=${from}-${to}`);
+                xhr.setRequestHeader("Range", "bytes=" + from + "-" + to);
               xhr.responseType = "arraybuffer";
               if (xhr.overrideMimeType) {
                 xhr.overrideMimeType("text/plain; charset=x-user-defined");
@@ -2545,11 +2558,11 @@ var AudioQualityModule = (() => {
               if (
                 !((xhr.status >= 200 && xhr.status < 300) || xhr.status === 304)
               )
-                abort(`Couldn't load ${url}. Status: ${xhr.status}`);
+                abort("Couldn't load " + url + ". Status: " + xhr.status);
               if (xhr.response !== undefined) {
                 return new Uint8Array(xhr.response || []);
               }
-              return intArrayFromString(xhr.responseText ?? "", true);
+              return intArrayFromString(xhr.responseText || "", true);
             };
             var lazyArray = this;
             lazyArray.setDataGetter((chunkNum) => {
@@ -2651,10 +2664,7 @@ var AudioQualityModule = (() => {
         return node;
       },
     };
-    var HEAP32;
-    var HEAP64;
     var SYSCALLS = {
-      currentUmask: 18,
       calculateAt(dirfd, path, allowEmpty) {
         if (PATH.isAbs(path)) {
           return path;
@@ -2715,7 +2725,7 @@ var AudioQualityModule = (() => {
         if (flags & 2) {
           return 0;
         }
-        var buffer = HEAPU8.subarray(addr, addr + len);
+        var buffer = HEAPU8.slice(addr, addr + len);
         FS.msync(stream, buffer, offset, len, flags);
       },
       getStreamFromFD(fd) {
@@ -2759,7 +2769,6 @@ var AudioQualityModule = (() => {
       return ret;
     };
     var syscallGetVarargP = syscallGetVarargI;
-    var HEAP16;
     function ___syscall_fcntl64(fd, cmd, varargs) {
       SYSCALLS.varargs = varargs;
       try {
@@ -2784,8 +2793,7 @@ var AudioQualityModule = (() => {
             return stream.flags;
           case 4: {
             var arg = syscallGetVarargI();
-            var mask = 289792;
-            stream.flags = (stream.flags & ~mask) | (arg & mask);
+            stream.flags |= arg;
             return 0;
           }
           case 12: {
@@ -2997,9 +3005,6 @@ var AudioQualityModule = (() => {
         path = SYSCALLS.getStr(path);
         path = SYSCALLS.calculateAt(dirfd, path);
         var mode = varargs ? syscallGetVarargI() : 0;
-        if (flags & 64) {
-          mode &= ~SYSCALLS.currentUmask;
-        }
         return FS.open(path, flags, mode).fd;
       } catch (e) {
         if (typeof FS == "undefined" || !(e.name === "ErrnoError")) throw e;
@@ -3056,6 +3061,26 @@ var AudioQualityModule = (() => {
       }
     }
     var __abort_js = () => abort("");
+    var __emscripten_fs_load_embedded_files = (ptr) => {
+      do {
+        var name_addr = HEAPU32[ptr >> 2];
+        ptr += 4;
+        var len = HEAPU32[ptr >> 2];
+        ptr += 4;
+        var content = HEAPU32[ptr >> 2];
+        ptr += 4;
+        var name = UTF8ToString(name_addr);
+        FS.createPath("/", PATH.dirname(name), true, true);
+        FS.createDataFile(
+          name,
+          null,
+          HEAP8.subarray(content, content + len),
+          true,
+          true,
+          true,
+        );
+      } while (HEAPU32[ptr >> 2]);
+    };
     var INT53_MAX = 9007199254740992;
     var INT53_MIN = -9007199254740992;
     var bigintToI53Checked = (num) =>
@@ -3063,9 +3088,6 @@ var AudioQualityModule = (() => {
     function __gmtime_js(time, tmPtr) {
       time = bigintToI53Checked(time);
       var date = new Date(time * 1e3);
-      if (isNaN(date.getTime())) {
-        return 1;
-      }
       HEAP32[tmPtr >> 2] = date.getUTCSeconds();
       HEAP32[(tmPtr + 4) >> 2] = date.getUTCMinutes();
       HEAP32[(tmPtr + 8) >> 2] = date.getUTCHours();
@@ -3076,7 +3098,6 @@ var AudioQualityModule = (() => {
       var start = Date.UTC(date.getUTCFullYear(), 0, 1, 0, 0, 0, 0);
       var yday = ((date.getTime() - start) / (1e3 * 60 * 60 * 24)) | 0;
       HEAP32[(tmPtr + 28) >> 2] = yday;
-      return 0;
     }
     var isLeapYear = (year) =>
       year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
@@ -3097,9 +3118,6 @@ var AudioQualityModule = (() => {
     function __localtime_js(time, tmPtr) {
       time = bigintToI53Checked(time);
       var date = new Date(time * 1e3);
-      if (isNaN(date.getTime())) {
-        return 1;
-      }
       HEAP32[tmPtr >> 2] = date.getSeconds();
       HEAP32[(tmPtr + 4) >> 2] = date.getMinutes();
       HEAP32[(tmPtr + 8) >> 2] = date.getHours();
@@ -3117,7 +3135,6 @@ var AudioQualityModule = (() => {
         (summerOffset != winterOffset &&
           date.getTimezoneOffset() == Math.min(winterOffset, summerOffset)) | 0;
       HEAP32[(tmPtr + 32) >> 2] = dst;
-      return 0;
     }
     var __mktime_js = function (tmPtr) {
       var ret = (() => {
@@ -3130,9 +3147,6 @@ var AudioQualityModule = (() => {
           HEAP32[tmPtr >> 2],
           0,
         );
-        if (isNaN(date.getTime())) {
-          return -1;
-        }
         var dst = HEAP32[(tmPtr + 32) >> 2];
         var guessedOffset = date.getTimezoneOffset();
         var start = new Date(date.getFullYear(), 0, 1);
@@ -3144,18 +3158,14 @@ var AudioQualityModule = (() => {
         var winterOffset = start.getTimezoneOffset();
         var dstOffset = Math.min(winterOffset, summerOffset);
         if (dst < 0) {
-          dst = Number(
+          HEAP32[(tmPtr + 32) >> 2] = Number(
             summerOffset != winterOffset && dstOffset == guessedOffset,
           );
         } else if (dst > 0 != (dstOffset == guessedOffset)) {
           var nonDstOffset = Math.max(winterOffset, summerOffset);
           var trueOffset = dst > 0 ? dstOffset : nonDstOffset;
           date.setTime(date.getTime() + (trueOffset - guessedOffset) * 6e4);
-          if (isNaN(date.getTime())) {
-            return -1;
-          }
         }
-        HEAP32[(tmPtr + 32) >> 2] = dst;
         HEAP32[(tmPtr + 24) >> 2] = date.getDay();
         var yday = ydayFromDate(date) | 0;
         HEAP32[(tmPtr + 28) >> 2] = yday;
@@ -3165,10 +3175,28 @@ var AudioQualityModule = (() => {
         HEAP32[(tmPtr + 12) >> 2] = date.getDate();
         HEAP32[(tmPtr + 16) >> 2] = date.getMonth();
         HEAP32[(tmPtr + 20) >> 2] = date.getYear();
-        return date.getTime() / 1e3;
+        var timeMs = date.getTime();
+        if (isNaN(timeMs)) {
+          return -1;
+        }
+        return timeMs / 1e3;
       })();
       return BigInt(ret);
     };
+    function __mmap_js(len, prot, flags, fd, offset, allocated, addr) {
+      offset = bigintToI53Checked(offset);
+      try {
+        var stream = SYSCALLS.getStreamFromFD(fd);
+        var res = FS.mmap(stream, len, offset, prot, flags);
+        var ptr = res.ptr;
+        HEAP32[allocated >> 2] = res.allocated;
+        HEAPU32[addr >> 2] = ptr;
+        return 0;
+      } catch (e) {
+        if (typeof FS == "undefined" || !(e.name === "ErrnoError")) throw e;
+        return -e.errno;
+      }
+    }
     var __tzset_js = (timezone, daylight, std_name, dst_name) => {
       var currentYear = new Date().getFullYear();
       var winter = new Date(currentYear, 0, 1);
@@ -3216,10 +3244,89 @@ var AudioQualityModule = (() => {
       HEAP64[ptime >> 3] = BigInt(nsec);
       return 0;
     }
+    var readEmAsmArgsArray = [];
+    var readEmAsmArgs = (sigPtr, buf) => {
+      readEmAsmArgsArray.length = 0;
+      var ch;
+      while ((ch = HEAPU8[sigPtr++])) {
+        var wide = ch != 105;
+        wide &= ch != 112;
+        buf += wide && buf % 8 ? 4 : 0;
+        readEmAsmArgsArray.push(
+          ch == 112
+            ? HEAPU32[buf >> 2]
+            : ch == 106
+              ? HEAP64[buf >> 3]
+              : ch == 105
+                ? HEAP32[buf >> 2]
+                : HEAPF64[buf >> 3],
+        );
+        buf += wide ? 8 : 4;
+      }
+      return readEmAsmArgsArray;
+    };
+    var runEmAsmFunction = (code, sigPtr, argbuf) => {
+      var args = readEmAsmArgs(sigPtr, argbuf);
+      return ASM_CONSTS[code](...args);
+    };
+    var _emscripten_asm_const_int = (code, sigPtr, argbuf) =>
+      runEmAsmFunction(code, sigPtr, argbuf);
+    var _emscripten_errn = (str, len) => err(UTF8ToString(str, len));
     var getHeapMax = () => 2147483648;
     var _emscripten_get_heap_max = () => getHeapMax();
-    var alignMemory = (size, alignment) =>
-      Math.ceil(size / alignment) * alignment;
+    var UNWIND_CACHE = {};
+    var stringToNewUTF8 = (str) => {
+      var size = lengthBytesUTF8(str) + 1;
+      var ret = _malloc(size);
+      if (ret) stringToUTF8(str, ret, size);
+      return ret;
+    };
+    var convertFrameToPC = (frame) => {
+      var match;
+      if ((match = /\bwasm-function\[\d+\]:(0x[0-9a-f]+)/.exec(frame))) {
+        return +match[1];
+      } else if ((match = /:(\d+):\d+(?:\)|$)/.exec(frame))) {
+        return 2147483648 | +match[1];
+      }
+      return 0;
+    };
+    var saveInUnwindCache = (callstack) => {
+      for (var line of callstack) {
+        var pc = convertFrameToPC(line);
+        if (pc) {
+          UNWIND_CACHE[pc] = line;
+        }
+      }
+    };
+    var jsStackTrace = () => new Error().stack.toString();
+    var _emscripten_stack_snapshot = () => {
+      var callstack = jsStackTrace().split("\n");
+      if (callstack[0] == "Error") {
+        callstack.shift();
+      }
+      saveInUnwindCache(callstack);
+      UNWIND_CACHE.last_addr = convertFrameToPC(callstack[3]);
+      UNWIND_CACHE.last_stack = callstack;
+      return UNWIND_CACHE.last_addr;
+    };
+    var _emscripten_pc_get_function = (pc) => {
+      var frame = UNWIND_CACHE[pc];
+      if (!frame) return 0;
+      var name;
+      var match;
+      if ((match = /^\s+at .*\.wasm\.(.*) \(.*\)$/.exec(frame))) {
+        name = match[1];
+      } else if ((match = /^\s+at (.*) \(.*\)$/.exec(frame))) {
+        name = match[1];
+      } else if ((match = /^(.+?)@/.exec(frame))) {
+        name = match[1];
+      } else {
+        return 0;
+      }
+      _free(_emscripten_pc_get_function.ret ?? 0);
+      _emscripten_pc_get_function.ret = stringToNewUTF8(name);
+      return _emscripten_pc_get_function.ret;
+    };
     var growMemory = (size) => {
       var oldHeapSize = wasmMemory.buffer.byteLength;
       var pages = ((size - oldHeapSize + 65535) / 65536) | 0;
@@ -3253,8 +3360,28 @@ var AudioQualityModule = (() => {
       }
       return false;
     };
+    var _emscripten_stack_unwind_buffer = (addr, buffer, count) => {
+      var stack;
+      if (UNWIND_CACHE.last_addr == addr) {
+        stack = UNWIND_CACHE.last_stack;
+      } else {
+        stack = jsStackTrace().split("\n");
+        if (stack[0] == "Error") {
+          stack.shift();
+        }
+        saveInUnwindCache(stack);
+      }
+      var offset = 3;
+      while (stack[offset] && convertFrameToPC(stack[offset]) != addr) {
+        ++offset;
+      }
+      for (var i = 0; i < count && stack[i + offset]; ++i) {
+        HEAP32[(buffer + i * 4) >> 2] = convertFrameToPC(stack[i + offset]);
+      }
+      return i;
+    };
     var ENV = {};
-    var getExecutableName = () => thisProgram;
+    var getExecutableName = () => thisProgram || "./this.program";
     var getEnvStrings = () => {
       if (!getEnvStrings.strings) {
         var lang =
@@ -3342,18 +3469,7 @@ var AudioQualityModule = (() => {
         var ptr = HEAPU32[iov >> 2];
         var len = HEAPU32[(iov + 4) >> 2];
         iov += 8;
-        try {
-          var curr = FS.read(stream, HEAP8, ptr, len, offset);
-        } catch (e) {
-          if (
-            ret > 0 &&
-            e instanceof FS.ErrnoError &&
-            (e.errno == 6 || e.errno == 6)
-          ) {
-            break;
-          }
-          throw e;
-        }
+        var curr = FS.read(stream, HEAP8, ptr, len, offset);
         if (curr < 0) return -1;
         ret += curr;
         if (curr < len) break;
@@ -3377,11 +3493,12 @@ var AudioQualityModule = (() => {
     function _fd_seek(fd, offset, whence, newOffset) {
       offset = bigintToI53Checked(offset);
       try {
-        if (isNaN(offset)) return 22;
+        if (isNaN(offset)) return 61;
         var stream = SYSCALLS.getStreamFromFD(fd);
         FS.llseek(stream, offset, whence);
         HEAP64[newOffset >> 3] = BigInt(stream.position);
-        if (stream.getdents && !offset && whence === 0) stream.getdents = null;
+        if (stream.getdents && offset === 0 && whence === 0)
+          stream.getdents = null;
         return 0;
       } catch (e) {
         if (typeof FS == "undefined" || !(e.name === "ErrnoError")) throw e;
@@ -3389,28 +3506,22 @@ var AudioQualityModule = (() => {
       }
     }
     var doWritev = (stream, iov, iovcnt, offset) => {
-      if (iovcnt == 1) {
-        return FS.write(
-          stream,
-          HEAP8,
-          HEAPU32[iov >> 2],
-          HEAPU32[(iov + 4) >> 2],
-          offset,
-        );
-      }
-      var total = 0;
-      for (var i = 0, p = iov; i < iovcnt; i++, p += 8) {
-        total += HEAPU32[(p + 4) >> 2];
-      }
-      var view = new Uint8Array(total);
-      var voff = 0;
-      for (var i = 0; i < iovcnt; i++, iov += 8) {
+      var ret = 0;
+      for (var i = 0; i < iovcnt; i++) {
         var ptr = HEAPU32[iov >> 2];
         var len = HEAPU32[(iov + 4) >> 2];
-        view.set(HEAPU8.subarray(ptr, ptr + len), voff);
-        voff += len;
+        iov += 8;
+        var curr = FS.write(stream, HEAP8, ptr, len, offset);
+        if (curr < 0) return -1;
+        ret += curr;
+        if (curr < len) {
+          break;
+        }
+        if (typeof offset != "undefined") {
+          offset += curr;
+        }
       }
-      return FS.write(stream, view, 0, total, offset);
+      return ret;
     };
     function _fd_write(fd, iov, iovcnt, pnum) {
       try {
@@ -3424,6 +3535,16 @@ var AudioQualityModule = (() => {
       }
     }
     var _llvm_eh_typeid_for = (type) => type;
+    var runtimeKeepaliveCounter = 0;
+    var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
+    var _proc_exit = (code) => {
+      EXITSTATUS = code;
+      if (!keepRuntimeAlive()) {
+        Module["onExit"]?.(code);
+        ABORT = true;
+      }
+      quit_(code, new ExitStatus(code));
+    };
     var wasmTableMirror = [];
     var getWasmTableEntry = (funcPtr) => {
       var func = wasmTableMirror[funcPtr];
@@ -3475,7 +3596,7 @@ var AudioQualityModule = (() => {
         for (var i = 0; i < args.length; i++) {
           var converter = toC[argTypes[i]];
           if (converter) {
-            if (!stack) stack = stackSave();
+            if (stack === 0) stack = stackSave();
             cArgs[i] = converter(args[i]);
           } else {
             cArgs[i] = args[i];
@@ -3484,47 +3605,12 @@ var AudioQualityModule = (() => {
       }
       var ret = func(...cArgs);
       function onDone(ret) {
-        if (stack) stackRestore(stack);
+        if (stack !== 0) stackRestore(stack);
         return convertReturnValue(ret);
       }
       ret = onDone(ret);
       return ret;
     };
-    var cwrap = (ident, returnType, argTypes, opts) => {
-      var numericArgs =
-        !argTypes ||
-        argTypes.every((type) => type === "number" || type === "boolean");
-      var numericRet = returnType !== "string";
-      if (numericRet && numericArgs && !opts) {
-        return getCFunc(ident);
-      }
-      return (...args) => ccall(ident, returnType, argTypes, args, opts);
-    };
-    var HEAPF32;
-    var HEAPF64;
-    function getValue(ptr, type = "i8") {
-      if (type.endsWith("*")) type = "*";
-      switch (type) {
-        case "i1":
-          return HEAP8[ptr];
-        case "i8":
-          return HEAP8[ptr];
-        case "i16":
-          return HEAP16[ptr >> 1];
-        case "i32":
-          return HEAP32[ptr >> 2];
-        case "i64":
-          return HEAP64[ptr >> 3];
-        case "float":
-          return HEAPF32[ptr >> 2];
-        case "double":
-          return HEAPF64[ptr >> 3];
-        case "*":
-          return HEAPU32[ptr >> 2];
-        default:
-          abort(`invalid type for getValue: ${type}`);
-      }
-    }
     var FS_createPath = (...args) => FS.createPath(...args);
     var FS_unlink = (...args) => FS.unlink(...args);
     var FS_createLazyFile = (...args) => FS.createLazyFile(...args);
@@ -3534,40 +3620,82 @@ var AudioQualityModule = (() => {
     FS.staticInit();
     {
       if (Module["noExitRuntime"]) noExitRuntime = Module["noExitRuntime"];
+      if (Module["preloadPlugins"]) preloadPlugins = Module["preloadPlugins"];
       if (Module["print"]) out = Module["print"];
       if (Module["printErr"]) err = Module["printErr"];
-      if (Module["arguments"]) programArgs = Module["arguments"];
+      if (Module["wasmBinary"]) wasmBinary = Module["wasmBinary"];
+      if (Module["arguments"]) arguments_ = Module["arguments"];
       if (Module["thisProgram"]) thisProgram = Module["thisProgram"];
-      var preInit = Module["preInit"];
-      if (preInit) {
-        if (typeof preInit == "function")
-          Module["preInit"] = preInit = [preInit];
-        while (preInit.length > 0) {
-          preInit.shift()();
+      if (Module["preInit"]) {
+        if (typeof Module["preInit"] == "function")
+          Module["preInit"] = [Module["preInit"]];
+        while (Module["preInit"].length > 0) {
+          Module["preInit"].shift()();
         }
       }
     }
     Module["addRunDependency"] = addRunDependency;
     Module["removeRunDependency"] = removeRunDependency;
     Module["ccall"] = ccall;
-    Module["cwrap"] = cwrap;
-    Module["getValue"] = getValue;
-    Module["UTF8ToString"] = UTF8ToString;
     Module["FS_preloadFile"] = FS_preloadFile;
     Module["FS_unlink"] = FS_unlink;
     Module["FS_createPath"] = FS_createPath;
     Module["FS_createDevice"] = FS_createDevice;
-    Module["FS"] = FS;
     Module["FS_createDataFile"] = FS_createDataFile;
     Module["FS_createLazyFile"] = FS_createLazyFile;
-    var _decodeMediaToWav,
-      _malloc,
-      _freeBuffer,
+    var ASM_CONSTS = {
+      1200128: () => typeof wasmOffsetConverter !== "undefined",
+      1200185: ($0, $1, $2, $3, $4) => {
+        if (typeof Module == "undefined" || !Module.MountedFiles) {
+          return 1;
+        }
+        let fileName = UTF8ToString(Number($0 >>> 0));
+        if (fileName.startsWith("./")) {
+          fileName = fileName.substring(2);
+        }
+        const fileData = Module.MountedFiles.get(fileName);
+        if (!fileData) {
+          return 2;
+        }
+        const offset = Number($1 >>> 0);
+        const length = Number($2 >>> 0);
+        const dataIdOrBuffer = Number($3 >>> 0);
+        const loadType = $4;
+        if (offset + length > fileData.byteLength) {
+          return 3;
+        }
+        try {
+          const data = fileData.subarray(offset, offset + length);
+          switch (loadType) {
+            case 0:
+              HEAPU8.set(data, dataIdOrBuffer);
+              break;
+            case 1:
+              if (Module.webgpuUploadExternalBuffer) {
+                Module.webgpuUploadExternalBuffer(dataIdOrBuffer, data);
+              } else {
+                Module.jsepUploadExternalBuffer(dataIdOrBuffer, data);
+              }
+              break;
+            default:
+              return 4;
+          }
+          return 0;
+        } catch {
+          return 4;
+        }
+      },
+    };
+    function HaveOffsetConverter() {
+      return typeof wasmOffsetConverter !== "undefined";
+    }
+    var _checkAudioQualityWasm,
+      ___cxa_free_exception,
       _free,
-      _isBlankAudio,
-      _computeSNR,
+      _malloc,
       _htonl,
       _htons,
+      _emscripten_builtin_memalign,
       _ntohs,
       _setThrew,
       __emscripten_tempret_set,
@@ -3583,15 +3711,14 @@ var AudioQualityModule = (() => {
       wasmMemory,
       wasmTable;
     function assignWasmExports(wasmExports) {
-      _decodeMediaToWav = Module["_decodeMediaToWav"] =
-        wasmExports["decodeMediaToWav"];
-      _malloc = Module["_malloc"] = wasmExports["malloc"];
-      _freeBuffer = Module["_freeBuffer"] = wasmExports["freeBuffer"];
+      _checkAudioQualityWasm = Module["_checkAudioQualityWasm"] =
+        wasmExports["checkAudioQualityWasm"];
+      ___cxa_free_exception = wasmExports["__cxa_free_exception"];
       _free = Module["_free"] = wasmExports["free"];
-      _isBlankAudio = Module["_isBlankAudio"] = wasmExports["isBlankAudio"];
-      _computeSNR = Module["_computeSNR"] = wasmExports["computeSNR"];
+      _malloc = Module["_malloc"] = wasmExports["malloc"];
       _htonl = wasmExports["htonl"];
       _htons = wasmExports["htons"];
+      _emscripten_builtin_memalign = wasmExports["emscripten_builtin_memalign"];
       _ntohs = wasmExports["ntohs"];
       _setThrew = wasmExports["setThrew"];
       __emscripten_tempret_set = wasmExports["_emscripten_tempret_set"];
@@ -3610,6 +3737,7 @@ var AudioQualityModule = (() => {
         wasmExports["__indirect_function_table"];
     }
     var wasmImports = {
+      HaveOffsetConverter,
       __assert_fail: ___assert_fail,
       __cxa_begin_catch: ___cxa_begin_catch,
       __cxa_end_catch: ___cxa_end_catch,
@@ -3632,15 +3760,22 @@ var AudioQualityModule = (() => {
       __syscall_stat64: ___syscall_stat64,
       __syscall_unlinkat: ___syscall_unlinkat,
       _abort_js: __abort_js,
+      _emscripten_fs_load_embedded_files: __emscripten_fs_load_embedded_files,
       _gmtime_js: __gmtime_js,
       _localtime_js: __localtime_js,
       _mktime_js: __mktime_js,
+      _mmap_js: __mmap_js,
       _tzset_js: __tzset_js,
       clock_time_get: _clock_time_get,
+      emscripten_asm_const_int: _emscripten_asm_const_int,
       emscripten_date_now: _emscripten_date_now,
+      emscripten_errn: _emscripten_errn,
       emscripten_get_heap_max: _emscripten_get_heap_max,
       emscripten_get_now: _emscripten_get_now,
+      emscripten_pc_get_function: _emscripten_pc_get_function,
       emscripten_resize_heap: _emscripten_resize_heap,
+      emscripten_stack_snapshot: _emscripten_stack_snapshot,
+      emscripten_stack_unwind_buffer: _emscripten_stack_unwind_buffer,
       environ_get: _environ_get,
       environ_sizes_get: _environ_sizes_get,
       fd_close: _fd_close,
@@ -3648,6 +3783,7 @@ var AudioQualityModule = (() => {
       fd_read: _fd_read,
       fd_seek: _fd_seek,
       fd_write: _fd_write,
+      invoke_di,
       invoke_diii,
       invoke_fiii,
       invoke_i,
@@ -3658,25 +3794,31 @@ var AudioQualityModule = (() => {
       invoke_iiiiii,
       invoke_iiiiiii,
       invoke_iiiiiiii,
+      invoke_iiiiiiiiiii,
       invoke_iiiiiiiiiiii,
       invoke_iiiiiiiiiiiii,
+      invoke_iiiiij,
+      invoke_j,
+      invoke_jiiii,
       invoke_v,
       invoke_vi,
       invoke_vii,
       invoke_viii,
       invoke_viiii,
+      invoke_viiiii,
       invoke_viiiiiii,
       invoke_viiiiiiiiii,
       invoke_viiiiiiiiiiiiiii,
       llvm_eh_typeid_for: _llvm_eh_typeid_for,
+      proc_exit: _proc_exit,
     };
-    function invoke_i(index) {
+    function invoke_iiii(index, a1, a2, a3) {
       var sp = stackSave();
       try {
-        return getWasmTableEntry(index)();
+        return getWasmTableEntry(index)(a1, a2, a3);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3686,57 +3828,7 @@ var AudioQualityModule = (() => {
         return getWasmTableEntry(index)(a1, a2);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
-        _setThrew(1, 0);
-      }
-    }
-    function invoke_v(index) {
-      var sp = stackSave();
-      try {
-        getWasmTableEntry(index)();
-      } catch (e) {
-        stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
-        _setThrew(1, 0);
-      }
-    }
-    function invoke_ii(index, a1) {
-      var sp = stackSave();
-      try {
-        return getWasmTableEntry(index)(a1);
-      } catch (e) {
-        stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
-        _setThrew(1, 0);
-      }
-    }
-    function invoke_iiiiii(index, a1, a2, a3, a4, a5) {
-      var sp = stackSave();
-      try {
-        return getWasmTableEntry(index)(a1, a2, a3, a4, a5);
-      } catch (e) {
-        stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
-        _setThrew(1, 0);
-      }
-    }
-    function invoke_vi(index, a1) {
-      var sp = stackSave();
-      try {
-        getWasmTableEntry(index)(a1);
-      } catch (e) {
-        stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
-        _setThrew(1, 0);
-      }
-    }
-    function invoke_vii(index, a1, a2) {
-      var sp = stackSave();
-      try {
-        getWasmTableEntry(index)(a1, a2);
-      } catch (e) {
-        stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3746,7 +3838,67 @@ var AudioQualityModule = (() => {
         getWasmTableEntry(index)(a1, a2, a3);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_vii(index, a1, a2) {
+      var sp = stackSave();
+      try {
+        getWasmTableEntry(index)(a1, a2);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_v(index) {
+      var sp = stackSave();
+      try {
+        getWasmTableEntry(index)();
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_i(index) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)();
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_vi(index, a1) {
+      var sp = stackSave();
+      try {
+        getWasmTableEntry(index)(a1);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_ii(index, a1) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)(a1);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_iiiiii(index, a1, a2, a3, a4, a5) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3756,7 +3908,7 @@ var AudioQualityModule = (() => {
         return getWasmTableEntry(index)(a1, a2, a3, a4);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3766,17 +3918,27 @@ var AudioQualityModule = (() => {
         getWasmTableEntry(index)(a1, a2, a3, a4);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
-    function invoke_iiii(index, a1, a2, a3) {
+    function invoke_viiiii(index, a1, a2, a3, a4, a5) {
       var sp = stackSave();
       try {
-        return getWasmTableEntry(index)(a1, a2, a3);
+        getWasmTableEntry(index)(a1, a2, a3, a4, a5);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_di(index, a1) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)(a1);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3786,7 +3948,7 @@ var AudioQualityModule = (() => {
         return getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3796,8 +3958,83 @@ var AudioQualityModule = (() => {
         return getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
+      }
+    }
+    function invoke_j(index) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)();
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+        return 0n;
+      }
+    }
+    function invoke_viiiiiii(index, a1, a2, a3, a4, a5, a6, a7) {
+      var sp = stackSave();
+      try {
+        getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_iiiiij(index, a1, a2, a3, a4, a5) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_iiiiiiiiiii(
+      index,
+      a1,
+      a2,
+      a3,
+      a4,
+      a5,
+      a6,
+      a7,
+      a8,
+      a9,
+      a10,
+    ) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)(
+          a1,
+          a2,
+          a3,
+          a4,
+          a5,
+          a6,
+          a7,
+          a8,
+          a9,
+          a10,
+        );
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+      }
+    }
+    function invoke_jiiii(index, a1, a2, a3, a4) {
+      var sp = stackSave();
+      try {
+        return getWasmTableEntry(index)(a1, a2, a3, a4);
+      } catch (e) {
+        stackRestore(sp);
+        if (e !== e + 0) throw e;
+        _setThrew(1, 0);
+        return 0n;
       }
     }
     function invoke_iiiiiiiiiiiii(
@@ -3833,7 +4070,7 @@ var AudioQualityModule = (() => {
         );
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3843,7 +4080,7 @@ var AudioQualityModule = (() => {
         return getWasmTableEntry(index)(a1, a2, a3);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3853,17 +4090,7 @@ var AudioQualityModule = (() => {
         return getWasmTableEntry(index)(a1, a2, a3);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
-        _setThrew(1, 0);
-      }
-    }
-    function invoke_viiiiiii(index, a1, a2, a3, a4, a5, a6, a7) {
-      var sp = stackSave();
-      try {
-        getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7);
-      } catch (e) {
-        stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3898,7 +4125,7 @@ var AudioQualityModule = (() => {
         );
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3920,7 +4147,7 @@ var AudioQualityModule = (() => {
         getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
@@ -3963,30 +4190,50 @@ var AudioQualityModule = (() => {
         );
       } catch (e) {
         stackRestore(sp);
-        if (!(e instanceof EmscriptenEH)) throw e;
+        if (e !== e + 0) throw e;
         _setThrew(1, 0);
       }
     }
-    async function run() {
+    function run() {
+      if (runDependencies > 0) {
+        dependenciesFulfilled = run;
+        return;
+      }
       preRun();
-      if (runDependencies) {
-        await resolveRunDependencies();
+      if (runDependencies > 0) {
+        dependenciesFulfilled = run;
+        return;
       }
-      var setStatus = Module["setStatus"];
-      if (setStatus) {
-        setStatus("Running...");
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        setTimeout(setStatus, 1, "");
+      function doRun() {
+        Module["calledRun"] = true;
+        if (ABORT) return;
+        initRuntime();
+        readyPromiseResolve?.(Module);
+        Module["onRuntimeInitialized"]?.();
+        postRun();
       }
-      if (ABORT) return;
-      initRuntime();
-      Module["onRuntimeInitialized"]?.();
-      postRun();
+      if (Module["setStatus"]) {
+        Module["setStatus"]("Running...");
+        setTimeout(() => {
+          setTimeout(() => Module["setStatus"](""), 1);
+          doRun();
+        }, 1);
+      } else {
+        doRun();
+      }
     }
     var wasmExports;
     wasmExports = await createWasm();
-    await run();
-    return Module;
+    run();
+    if (runtimeInitialized) {
+      moduleRtn = Module;
+    } else {
+      moduleRtn = new Promise((resolve, reject) => {
+        readyPromiseResolve = resolve;
+        readyPromiseReject = reject;
+      });
+    }
+    return moduleRtn;
   };
 })();
 if (typeof exports === "object" && typeof module === "object") {

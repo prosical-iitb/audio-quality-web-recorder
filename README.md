@@ -8,8 +8,6 @@ The module provides the following audio quality pipeline:
 ```text
 Audio Blob
    ↓
-Media → WAV Conversion
-   ↓
 Audio Quality Check
    ↓
 Result
@@ -143,6 +141,22 @@ recorder.
 
 ---
 
+# Response Structure
+
+The `checkAudioQuality()` function returns a JSON object containing the result of the audio quality checks.
+
+### Successful Response
+
+When the audio passes the quality checks:
+
+```json
+{
+  "isBlank": false,
+  "isNoisy": false
+}
+
+---
+
 # Integration Requirements
 
 The application should ensure:
@@ -159,7 +173,7 @@ The helper expects the WASM glue script to be available at:
 /audioQuality.js
 ```
 
-and the Emscripten-generated glue code will load:
+and the Emscripten-generated code will load:
 
 ```text
 /audioQuality.wasm
@@ -217,7 +231,13 @@ The example handles the returned result and displays the response:
 ```js
 console.log("Audio quality response:", result);
 
-alert(result.message);
+if (result.isBlank) {
+  alert("Blank audio detected.");
+}
+
+if (result.isNoisy) {
+  alert("Noisy audio detected.");
+}
 ```
 
 The `react-example/` directory can be used as the reference
