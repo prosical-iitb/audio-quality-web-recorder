@@ -1,7 +1,6 @@
 # Audio Quality WASM
 
-A WebAssembly-based audio quality processing module for browser
-applications.
+A WebAssembly-based audio quality processing module for browser applications.
 
 The module provides the following audio quality pipeline:
 
@@ -87,12 +86,7 @@ your-project/
 └── src/
 ```
 
-The files must be available from the application root because
-`audioQualityChecker.js` loads the glue script using:
-
-```js
-/audioQuality.js
-```
+The WASM files must be available from the application's public path.
 
 ---
 
@@ -156,6 +150,22 @@ When the audio passes the quality checks:
 }
 ```
 
+### Blank Audio
+
+```json
+{
+  "isBlank": true,
+  "isNoisy": false
+}
+
+### Noisy Audio
+
+```json
+{
+  "isBlank": false,
+  "isNoisy": true
+}
+
 ---
 
 # Integration Requirements
@@ -168,19 +178,22 @@ The application should ensure:
   utility/helper folder.
 - The application passes an actual `Blob` to `checkAudioQuality()`.
 
-The helper expects the WASM glue script to be available at:
 
-```text
-/audioQuality.js
-```
-
-and the Emscripten-generated code will load:
-
-```text
-/audioQuality.wasm
-```
-
-from the same public location.
+> **Note:** If the application is deployed under a subpath, update the
+> `audioQuality.js` path in `audioQualityChecker.js` accordingly.
+>
+> ```js
+> await loadScript("/audioQuality.js", "AudioQualityModule");
+> ```
+>
+> For Vite applications, use:
+>
+> ```js
+> await loadScript(
+>   `${import.meta.env.BASE_URL}audioQuality.js`,
+>   "AudioQualityModule"
+> );
+> ```
 
 ---
 
