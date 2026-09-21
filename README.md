@@ -157,6 +157,7 @@ When the audio passes the quality checks:
   "isBlank": true,
   "isNoisy": false
 }
+```
 
 ### Noisy Audio
 
@@ -165,6 +166,7 @@ When the audio passes the quality checks:
   "isBlank": false,
   "isNoisy": true
 }
+```
 
 ---
 
