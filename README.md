@@ -154,6 +154,7 @@ When the audio passes the quality checks:
   "isBlank": false,
   "isNoisy": false
 }
+```
 
 ---
 
