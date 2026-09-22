@@ -67,6 +67,12 @@ const StoryRecorder = () => {
 
   const [submitted, setSubmitted] = useState(false);
 
+  const [qualityAlert, setQualityAlert] = useState({
+    open: false,
+    title: "",
+    message: "",
+  });
+
   // REFS
   const canvasRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -397,13 +403,23 @@ const StoryRecorder = () => {
 
           if (result.isBlank) {
             setShowText(true);
-            alert("Blank audio detected.");
+            setQualityAlert({
+              open: true,
+              title: "Audio quality issue (Mic. issue)",
+              message:
+                "We detected that the audio is completely blank, which will affect your result. Please check your microphone connection and try again.",
+            });
             return;
           }
 
           if (result.isNoisy) {
             setShowText(true);
-            alert("Noisy audio detected.");
+            setQualityAlert({
+              open: true,
+              title: "Audio quality issue (Noisy background)",
+              message:
+                "We detected high background noise, which may affect your result. We recommend recording in a quieter environment.",
+            });
             return;
           }
 
@@ -697,6 +713,40 @@ const StoryRecorder = () => {
   return (
     <div className="recorder-page">
       {DesktopMicModal}
+
+      <Dialog
+        open={qualityAlert.open}
+        onClose={() =>
+          setQualityAlert((prev) => ({
+            ...prev,
+            open: false,
+          }))
+        }
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          <b>{qualityAlert.title}</b>
+        </DialogTitle>
+
+        <DialogContent>
+          <p>{qualityAlert.message}</p>
+        </DialogContent>
+
+        <DialogActions>
+          <Button
+            variant="contained"
+            onClick={() =>
+              setQualityAlert((prev) => ({
+                ...prev,
+                open: false,
+              }))
+            }
+          >
+            OK
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <div className="recorder-card">
         {/* HEADER */}
