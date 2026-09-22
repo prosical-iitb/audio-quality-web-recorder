@@ -108,6 +108,21 @@ src/
 
 The `audioQualityChecker.js` file processes the recorded audio and returns the audio quality result.
 
+> **Note:** If the application is deployed under a subpath, update the
+> `audioQuality.js` path in `audioQualityChecker.js` accordingly.
+>
+> ```js
+> await loadScript("/audioQuality.js", "AudioQualityModule");
+> ```
+>
+> For Vite applications, use:
+>
+> ```js
+> await loadScript(
+>   `${import.meta.env.BASE_URL}audioQuality.js`,
+>   "AudioQualityModule"
+> );
+
 ---
 
 # Using `checkAudioQuality()`
@@ -143,6 +158,7 @@ The `checkAudioQuality()` function returns a JSON object containing the result o
 
 When the audio passes the quality checks:
 
+### Valid Audio (Not blank or silent)
 ```json
 {
   "isBlank": false,
@@ -150,7 +166,7 @@ When the audio passes the quality checks:
 }
 ```
 
-### Blank Audio
+### Blank Audio (No sound)
 
 ```json
 {
@@ -159,7 +175,7 @@ When the audio passes the quality checks:
 }
 ```
 
-### Noisy Audio
+### Noisy Audio (Note: This check needs at least 7 seconds of audio to return a decision. Any audio below this duration will always return "isNoisy": false)
 
 ```json
 {
@@ -167,36 +183,6 @@ When the audio passes the quality checks:
   "isNoisy": true
 }
 ```
-
----
-
-# Integration Requirements
-
-The application should ensure:
-
-- `audioQuality.js` and `audioQuality.wasm` are present in the
-  `public/` folder.
-- `audioQualityChecker.js` is copied into the application's
-  utility/helper folder.
-- The application passes an actual `Blob` to `checkAudioQuality()`.
-
-
-> **Note:** If the application is deployed under a subpath, update the
-> `audioQuality.js` path in `audioQualityChecker.js` accordingly.
->
-> ```js
-> await loadScript("/audioQuality.js", "AudioQualityModule");
-> ```
->
-> For Vite applications, use:
->
-> ```js
-> await loadScript(
->   `${import.meta.env.BASE_URL}audioQuality.js`,
->   "AudioQualityModule"
-> );
-> ```
-
 ---
 
 # React Example
