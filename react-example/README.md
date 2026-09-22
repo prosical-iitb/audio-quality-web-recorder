@@ -102,7 +102,7 @@ npm --version
 
 ---
 
-# Setup
+# Local Setup
 
 Navigate to the `react-example` directory:
 
@@ -130,7 +130,15 @@ Vite will display the local development URL in the terminal, for
 example:
 
 ```text
-http://localhost:5173/
+http://localhost:5173/audio-quality-web-recorder/
 ```
 
 Open the displayed URL in a browser.
+
+---
+
+# Hosted Application
+
+The React example is deployed and can be accessed here:
+
+https://prosical-iitb.github.io/audio-quality-web-recorder/
