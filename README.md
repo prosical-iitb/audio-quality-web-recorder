@@ -158,7 +158,7 @@ The `checkAudioQuality()` function returns a JSON object containing the result o
 
 When the audio passes the quality checks:
 
-### Valid Audio (Not blank or silent)
+### Valid Audio (Not blank or noisy)
 ```json
 {
   "isBlank": false,
