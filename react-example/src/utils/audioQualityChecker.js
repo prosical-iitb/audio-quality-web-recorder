@@ -55,6 +55,10 @@ function getWasmModule() {
   return wasmModulePromise;
 }
 
+export function preloadWasm() {
+  return getWasmModule();
+}
+
 export async function checkAudioQuality(audioBlob) {
   if (!audioBlob) {
     throw new Error("No audio blob provided");
