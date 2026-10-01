@@ -19,6 +19,7 @@ import {
 import MicIcon from "@mui/icons-material/Mic";
 import SettingsIcon from "@mui/icons-material/Settings";
 import CloseIcon from "@mui/icons-material/Close";
+import DownloadIcon from "@mui/icons-material/Download";
 
 import "./StoryRecorder.css";
 import { checkAudioQuality, preloadWasm } from "../utils/audioQualityChecker";
@@ -87,6 +88,7 @@ const StoryRecorder = () => {
   const audioChunksRef = useRef([]);
   const audioContextRef = useRef(null);
   const dataArrayRef = useRef(null);
+  const recordingTimestampRef = useRef(null);
 
   // CLEANUP RECORDING
   const cleanupRecording = () => {
@@ -237,23 +239,14 @@ const StoryRecorder = () => {
   useEffect(() => {
     let mounted = true;
 
-    const loadWasm = async () => {
-      try {
-        await preloadWasm();
-
-        if (mounted) {
-          setWasmReady(true);
-        }
-      } catch (error) {
+    preloadWasm()
+      .then(() => {
+        if (mounted) setWasmReady(true);
+      })
+      .catch((error) => {
         console.error("WASM preload failed:", error);
-
-        if (mounted) {
-          setWasmReady(false);
-        }
-      }
-    };
-
-    loadWasm();
+        if (mounted) setWasmReady(false);
+      });
 
     return () => {
       mounted = false;
@@ -405,6 +398,8 @@ const StoryRecorder = () => {
 
       mediaRecorderRef.current = mediaRecorder;
 
+      recordingTimestampRef.current = new Date();
+
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
           audioChunksRef.current.push(e.data);
@@ -419,6 +414,9 @@ const StoryRecorder = () => {
         audioChunksRef.current = [];
 
         cleanupRecording();
+
+        setAudioBlob(blob);
+        setAudioURL(URL.createObjectURL(blob));
 
         try {
           const result = await checkAudioQuality(blob);
@@ -461,9 +459,6 @@ const StoryRecorder = () => {
             });
             return;
           }
-
-          setAudioBlob(blob);
-          setAudioURL(URL.createObjectURL(blob));
         } catch (error) {
           console.error("Audio quality check failed:", error);
         } finally {
@@ -748,6 +743,32 @@ const StoryRecorder = () => {
     );
   }
 
+  const getRecordingFileName = () => {
+    const date = recordingTimestampRef.current || new Date();
+
+    const dd = String(date.getDate()).padStart(2, "0");
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const yyyy = date.getFullYear();
+
+    const hh = String(date.getHours()).padStart(2, "0");
+    const min = String(date.getMinutes()).padStart(2, "0");
+    const ss = String(date.getSeconds()).padStart(2, "0");
+
+    return `recording_${dd}-${mm}-${yyyy}_${hh}-${min}-${ss}.webm`;
+  };
+
+  const handleDownload = () => {
+    if (!audioURL) return;
+
+    const link = document.createElement("a");
+    link.href = audioURL;
+    link.download = getRecordingFileName();
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // MAIN RECORDER SCREEN
   return (
     <div className="recorder-page">
@@ -929,8 +950,37 @@ const StoryRecorder = () => {
         {/* RECORDED AUDIO PREVIEW */}
 
         {audioURL && !isRecording && (
-          <div className="audio-preview">
-            <audio controls src={audioURL} />
+          <div
+            className="audio-preview"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+            }}
+          >
+            <audio
+              controls
+              src={audioURL}
+              style={{
+                flex: 1,
+                minWidth: 0,
+              }}
+            />
+
+            <IconButton
+              onClick={handleDownload}
+              title="Download audio"
+              aria-label="Download audio"
+              sx={{
+                backgroundColor: "#546e7a",
+                color: "#fff",
+                "&:hover": {
+                  backgroundColor: "#455a64",
+                },
+              }}
+            >
+              <DownloadIcon />
+            </IconButton>
           </div>
         )}
       </div>

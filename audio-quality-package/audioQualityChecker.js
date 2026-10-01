@@ -33,7 +33,10 @@ function loadScript(src, globalName) {
 
 async function initializeWasm() {
   try {
-    await loadScript("/audioQuality.js", "AudioQualityModule");
+    await loadScript(
+      `${import.meta.env.BASE_URL}audioQuality.js`,
+      "AudioQualityModule",
+    );
 
     const mod = await window.AudioQualityModule();
 
@@ -50,6 +53,10 @@ function getWasmModule() {
   }
 
   return wasmModulePromise;
+}
+
+export function preloadWasm() {
+  return getWasmModule();
 }
 
 export async function checkAudioQuality(audioBlob) {
