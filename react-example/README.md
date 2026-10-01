@@ -1,12 +1,8 @@
 # React Example
 
-This folder contains a React application that demonstrates how to
-integrate and use the Audio Quality WASM module.
+This folder contains a React application that demonstrates how to integrate and use the Audio Quality WASM module.
 
-The example provides a simple audio recording interface. After a
-recording is stopped, the recorded audio is passed to the audio quality
-checker, which processes the recording and returns the audio quality
-result.
+The example provides a simple audio recording interface. After a recording is stopped, the recorded audio is passed to the audio quality checker, which processes the recording and returns the audio quality result.
 
 ## Example Flow
 
