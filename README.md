@@ -114,7 +114,8 @@ The `audioQualityChecker.js` file processes the recorded audio and returns the a
 
 The WASM module should be preloaded during application/component initialization, before calling `checkAudioQuality()`.
 
-Use `preloadWasm()` during the React component initialization. See the [React Example](#react-example) section for the implementation.
+Use `preloadWasm()` during the React component initialization. See the React Example section for the implementation.
+
 
 > **Note:** If the application is deployed under a subpath, update the
 > `audioQuality.js` path in `audioQualityChecker.js` accordingly.
