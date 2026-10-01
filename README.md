@@ -108,6 +108,14 @@ src/
 
 The `audioQualityChecker.js` file processes the recorded audio and returns the audio quality result.
 
+---
+
+## 3. Preload the WASM Module
+
+The WASM module should be preloaded during application/component initialization, before calling `checkAudioQuality()`.
+
+Use `preloadWasm()` during the React component initialization. See the [React Example](#react-example) section for the implementation.
+
 > **Note:** If the application is deployed under a subpath, update the
 > `audioQuality.js` path in `audioQualityChecker.js` accordingly.
 >
@@ -138,15 +146,15 @@ It expects an actual JavaScript `Blob` containing the recorded audio.
 Example:
 
 ```js
-import { checkAudioQuality } from "./utils/audioQualityChecker";
-
 const result = await checkAudioQuality(audioBlob);
 
 console.log(result);
 ```
 
-The `audioBlob` should be the Blob produced by the application's audio
-recorder.
+The `audioBlob` should be the Blob produced by the application's audio recorder.
+
+> **Note:** Make sure preloadWasm() has completed before calling checkAudioQuality(). 
+> See the React Example section for the recommended initialization flow.
 
 ---
 
@@ -162,6 +170,7 @@ When the audio passes the quality checks:
 ```json
 {
   "isBlank": false,
+  "noSpeech": false,
   "isNoisy": false
 }
 ```
@@ -171,6 +180,17 @@ When the audio passes the quality checks:
 ```json
 {
   "isBlank": true,
+  "noSpeech": false,
+  "isNoisy": false
+}
+```
+
+### No Speech (No significant speech)
+
+```json
+{
+  "isBlank": false,
+  "noSpeech": true,
   "isNoisy": false
 }
 ```
@@ -180,9 +200,21 @@ When the audio passes the quality checks:
 ```json
 {
   "isBlank": false,
+  "noSpeech": false,
   "isNoisy": true
 }
 ```
+
+### Error Response
+
+If an error occurs while processing the audio, the function returns an error response:
+
+```json
+{
+  "error": "Error message"
+}
+```
+
 ---
 
 # React Example
@@ -211,7 +243,33 @@ The example follows the same integration approach described above.
 In the recorder component, the helper is imported:
 
 ```js
-import { checkAudioQuality } from "../utils/audioQualityChecker";
+import { checkAudioQuality, preloadWasm } from "../utils/audioQualityChecker";
+```
+
+The WASM module is preloaded once when the React component is mounted:
+
+```js
+useEffect(() => {
+  let mounted = true;
+
+  preloadWasm()
+    .then(() => {
+      if (mounted) {
+        setWasmReady(true);
+      }
+    })
+    .catch((error) => {
+      console.error("WASM preload failed:", error);
+
+      if (mounted) {
+        setWasmReady(false);
+      }
+    });
+
+  return () => {
+    mounted = false;
+  };
+}, []);
 ```
 
 After recording stops, the recorded chunks are converted into a Blob:
@@ -231,16 +289,26 @@ const result = await checkAudioQuality(blob);
 The example handles the returned result and displays the response:
 
 ```js
-console.log("Audio quality response:", result);
+const result = await checkAudioQuality(blob);
+
+if (result.error) {
+  throw new Error(result.error);
+}
 
 if (result.isBlank) {
-  alert("Blank audio detected.");
+  // Handle blank audio
+  return;
 }
 
 if (result.isNoisy) {
-  alert("Noisy audio detected.");
+  // Handle noisy audio
+  return;
+}
+
+if (result.noSpeech) {
+  // Handle audio with no significant speech
+  return;
 }
 ```
 
-The `react-example/` directory can be used as the reference
-implementation for integrating the same flow into a React project.
+The `react-example/` directory can be used as the reference implementation for integrating the same flow into a React project.
