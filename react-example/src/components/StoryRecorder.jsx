@@ -20,6 +20,7 @@ import MicIcon from "@mui/icons-material/Mic";
 import SettingsIcon from "@mui/icons-material/Settings";
 import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download";
+import UploadFileIcon from "@mui/icons-material/UploadFile";
 
 import "./StoryRecorder.css";
 import { checkAudioQuality, preloadWasm } from "../utils/audioQualityChecker";
@@ -89,6 +90,7 @@ const StoryRecorder = () => {
   const audioContextRef = useRef(null);
   const dataArrayRef = useRef(null);
   const recordingTimestampRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // CLEANUP RECORDING
   const cleanupRecording = () => {
@@ -769,6 +771,64 @@ const StoryRecorder = () => {
     document.body.removeChild(link);
   };
 
+  const handleAudioUpload = async (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    setAudioBlob(file);
+    setAudioURL(URL.createObjectURL(file));
+    setShowText(false);
+
+    try {
+      const result = await checkAudioQuality(file);
+
+      console.log("Audio quality response:", result);
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      if (result.isBlank) {
+        setShowText(true);
+        setQualityAlert({
+          open: true,
+          title: "Audio quality issue (Mic. issue)",
+          message:
+            "We detected that the audio is completely blank, which will affect your result. Please check your microphone connection and try again.",
+        });
+        return;
+      }
+
+      if (result.isNoisy) {
+        setShowText(true);
+        setQualityAlert({
+          open: true,
+          title: "Audio quality issue (Noisy background)",
+          message:
+            "We detected high background noise, which may affect your result. We recommend recording in a quieter environment.",
+        });
+        return;
+      }
+
+      if (result.noSpeech) {
+        setShowText(true);
+        setQualityAlert({
+          open: true,
+          title: "Audio quality issue (No sound)",
+          message:
+            "We detected that your audio does not have any significant speech, which may affect your result. Please check your microphone and ensure that you read the text aloud.",
+        });
+        return;
+      }
+    } catch (error) {
+      console.error("Audio quality check failed:", error);
+    }
+
+    // Allow the same file to be selected again
+    event.target.value = "";
+  };
+
   // MAIN RECORDER SCREEN
   return (
     <div className="recorder-page">
@@ -905,6 +965,37 @@ const StoryRecorder = () => {
             >
               {stopping ? "Stopping..." : "Stop"}
             </Button>
+          )}
+
+          {!audioBlob && (
+            <>
+              <Button
+                variant="contained"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isRecording || initializing || stopping || !wasmReady}
+                startIcon={<UploadFileIcon />}
+                sx={{
+                  backgroundColor: "#546e7a",
+                  borderRadius: "30px",
+                  textTransform: "none",
+                  fontWeight: "600",
+                  color: "#fff",
+                  "&:hover": {
+                    backgroundColor: "#455a64",
+                  },
+                }}
+              >
+                Upload Audio
+              </Button>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                hidden
+                onChange={handleAudioUpload}
+              />
+            </>
           )}
 
           {audioBlob && !isRecording && (
